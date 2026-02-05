@@ -41,8 +41,7 @@ async function handleWalletSubmit() {
   state.balances = [];
   renderBalances();
 
-  await fetchEthBalance();
-  await fetchTokenBalances();
+  loadPortfolio();
 }
 
 function startLoading() {
@@ -54,91 +53,87 @@ function stopLoading() {
   state.isLoading = false;
 }
 
-async function fetchEthBalance() {
-  try {
-    startLoading();
+async function getEthBalance() {
+  const response = await fetch(
+    "https://rpc.ankr.com/eth/a9b71f80deb3fbd0104600380864f29e136687f5bbde1066d395f0d9688a407e",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "eth_getBalance",
+        params: [state.wallet, "latest"],
+        id: 1,
+      }),
+    }
+  );
 
+  const data = await response.json();
+
+  if (data.error) throw new Error(data.error.message);
+
+  const wei = BigInt(data.result);
+  return {
+    symbol: "ETH",
+    amount: (wei / 10n ** 18n).toString(),
+  };
+}
+
+
+async function getTokenBalances() {
     const response = await fetch(
-      "https://rpc.ankr.com/eth/a9b71f80deb3fbd0104600380864f29e136687f5bbde1066d395f0d9688a407e",
+      "https://rpc.ankr.com/multichain/a9b71f80deb3fbd0104600380864f29e136687f5bbde1066d395f0d9688a407e",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           jsonrpc: "2.0",
-          method: "eth_getBalance",
-          params: [state.wallet, "latest"],
+          method: "ankr_getAccountBalance",
+          params: {
+            walletAddress: state.wallet,
+            blockchain: "eth",
+          },
           id: 1,
         }),
       }
     );
-
-    if (!response.ok) {
-      throw new Error("Network response failed");
-    }
-
+  
     const data = await response.json();
-
-    if (data.error) {
-      throw new Error(data.error.message);
-    }
-
-    const wei = BigInt(data.result);
-    const eth = (wei / 10n ** 18n).toString();
-
-    state.balances = [{ symbol: "ETH", amount: eth }];
-    renderBalances();
-
-    setStatus("ETH balance loaded", "success");
-  } catch (err) {
-    state.error = err.message;
-    setStatus(err.message || "Failed to fetch ETH balance", "error");
-  } finally {
-    stopLoading();
+  
+    if (data.error) throw new Error(data.error.message);
+  
+    return data.result.assets.map((token) => ({
+      symbol: token.tokenSymbol,
+      amount: token.balance,
+    }));
   }
-}
+  
 
-async function fetchTokenBalances() {
+async function loadPortfolio() {
     try {
       startLoading();
   
-      const response = await fetch(
-        "https://rpc.ankr.com/multichain/a9b71f80deb3fbd0104600380864f29e136687f5bbde1066d395f0d9688a407e",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            method: "ankr_getAccountBalance",
-            params: {
-              walletAddress: state.wallet,
-              blockchain: "eth",
-            },
-            id: 1,
-          }),
-        }
-      );
+      const results = await Promise.allSettled([
+        getEthBalance(),
+        getTokenBalances(),
+      ]);
   
-      if (!response.ok) {
-        throw new Error("Network error");
+      const balances = [];
+  
+      if (results[0].status === "fulfilled") {
+        balances.push(results[0].value);
       }
   
-      const data = await response.json();
-  
-      if (data.error) {
-        throw new Error(data.error.message);
+      if (results[1].status === "fulfilled") {
+        balances.push(...results[1].value);
       }
   
-      const tokens = data.result.assets.map((token) => ({
-        symbol: token.tokenSymbol,
-        amount: token.balance,
-      }));
-  
-      state.balances = [...state.balances, ...tokens];
+      state.balances = balances;
       renderBalances();
   
-      setStatus("Token balances loaded", "success");
-    } catch (err) {
-      setStatus(err.message || "Failed to fetch token balances", "error");
+      setStatus("Portfolio loaded", "success");
+    } catch {
+      setStatus("Failed to load portfolio", "error");
     } finally {
       stopLoading();
     }
